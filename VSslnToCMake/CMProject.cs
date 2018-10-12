@@ -502,6 +502,11 @@ namespace VSslnToCMake
             {
                 case ConfigurationTypes.typeApplication:
                     sb.AppendLine($"add_executable({targetName}");
+                    VCLinkerTool linkerTool = vcCfgs[0].Tools.Item("VCLinkerTool");
+                    if (linkerTool.SubSystem == subSystemOption.subSystemWindows)
+                    {
+                        sb.AppendLine("  WIN32");
+                    }
                     break;
                 case ConfigurationTypes.typeDynamicLibrary:
                     sb.AppendLine($"add_library({targetName} SHARED");
@@ -509,11 +514,6 @@ namespace VSslnToCMake
                 case ConfigurationTypes.typeStaticLibrary:
                     sb.AppendLine($"add_library({targetName} STATIC");
                     break;
-            }
-            VCLinkerTool linkerTool = vcCfgs[0].Tools.Item("VCLinkerTool");
-            if (linkerTool.SubSystem == subSystemOption.subSystemWindows)
-            {
-                sb.AppendLine("  WIN32");
             }
 
             var outputFiles = srcs.Select(x => x.vcFile.RelativePath).ToList();
