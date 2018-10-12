@@ -164,6 +164,7 @@ namespace VSslnToCMake
         private SettingsPerConfig projectSettingsPerConfig;
         private List<CMFile> srcs;
         private List<CMFile> hdrs;
+        private List<CMFile> resources;
         private string cmakeListsDir;
         private string targetName;
 
@@ -256,9 +257,22 @@ namespace VSslnToCMake
                 return false;
             }
 
+            // Make sure that 'Use of MFC' are same in all configurations.
+            if (vcCfgs.Select(x => x.useOfMfc).Distinct().Count() != 1)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("Mismatch 'Use of MFC':");
+                vcCfgs.ForEach(
+                    vcCfg =>
+                    sb.AppendLine($"  {vcCfg.useOfMfc} ({vcCfg.Name})"));
+                OutputError(sb.ToString());
+                return false;
+            }
+
             // Target source and header files
             srcs = new List<CMFile>();
             hdrs = new List<CMFile>();
+            resources = new List<CMFile>();
             ExtractSourceFiles(project);
 
             return true;
@@ -312,7 +326,14 @@ namespace VSslnToCMake
                         hdrs.Add(new CMFile { vcFile = vcfile });
                         Trace.WriteLine(vcfile.Name);
                         break;
+                    case eFileType.eFileTypeBMP:
+                    case eFileType.eFileTypeICO:
+                    case eFileType.eFileTypeRC:
+                        resources.Add(new CMFile { vcFile = vcfile });
+                        Trace.WriteLine(vcfile.Name);
+                        break;
                     default:
+                        Trace.WriteLine($"Skipped: {vcfile.Name}");
                         break;
                 }
             }
@@ -348,6 +369,13 @@ namespace VSslnToCMake
                     case charSet.charSetNotSet:
                     default:
                         break;
+                }
+
+                // MFC
+                if (vcCfg.useOfMfc == useOfMfc.useMfcDynamic ||
+                    vcCfg.useOfMfc == useOfMfc.useMfcStatic)
+                {
+                    settings.preprocessorDefs.Add("_AFXDLL");
                 }
 
                 // Preprocessor definitions
@@ -459,6 +487,16 @@ namespace VSslnToCMake
             sb.AppendLine("    CACHE STRING \"Configuration types\" FORCE)");
             sb.AppendLine();
 
+            // MFC
+            if (vcCfgs[0].useOfMfc == useOfMfc.useMfcDynamic ||
+                vcCfgs[0].useOfMfc == useOfMfc.useMfcStatic)
+            {
+                sb.AppendLine("# Use of MFC");
+                sb.AppendFormat($@"set(CMAKE_MFC_FLAG {(vcCfgs[0].useOfMfc == useOfMfc.useMfcStatic ? 1 : 2)})");
+                sb.AppendLine();
+                sb.AppendLine();
+            }
+
             // Source file names
             switch (vcCfgs[0].ConfigurationType)
             {
@@ -472,9 +510,17 @@ namespace VSslnToCMake
                     sb.AppendLine($"add_library({targetName} STATIC");
                     break;
             }
+            VCLinkerTool linkerTool = vcCfgs[0].Tools.Item("VCLinkerTool");
+            if (linkerTool.SubSystem == subSystemOption.subSystemWindows)
+            {
+                sb.AppendLine("  WIN32");
+            }
+
             var outputFiles = srcs.Select(x => x.vcFile.RelativePath).ToList();
             outputFiles.AddRange(
                 hdrs.Select(x => x.vcFile.RelativePath).ToList());
+            outputFiles.AddRange(
+                resources.Select(x => x.vcFile.RelativePath).ToList());
             outputFiles.Sort();
             outputFiles.ForEach(x => sb.AppendLine($"  {ModifyPath(x)}"));
             sb.AppendLine(")");

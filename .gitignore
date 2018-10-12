@@ -1,8 +1,10 @@
 *.VC.db
+*.aps
 *.opendb
 *csproj.user
 *vcxproj.user
 .vs/
+VSslnToCMakePlugin/LICENSE.txt
 bin/
 obj/
 packages/
@@ -15,4 +17,5 @@ tests/ConsoleApplication2015/shared_lib/x64/
 tests/ConsoleApplication2015/static_lib/CMakeLists.txt
 tests/ConsoleApplication2015/static_lib/x64/
 tests/ConsoleApplication2015/x64/
-VSslnToCMakePlugin/LICENSE.txt
+tests/MFCApplication1/MFCApplication1/x64/
+tests/MFCApplication1/x64/
