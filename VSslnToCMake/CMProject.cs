@@ -125,6 +125,11 @@ namespace VSslnToCMake
         /// Precompiled header file setting
         /// </summary>
         public PchSetting pch;
+
+        /// <summary>
+        /// SDL check
+        /// </summary>
+        public bool? sdlCheck;
     }
 
     class CMFile
@@ -282,11 +287,15 @@ namespace VSslnToCMake
         {
             logger.Info($"--- Converting {Project.FullName} ---");
 
+            // XML document of the project file to extract settings
+            // not provided by COM interfaces.
+            var xml = CreateXmlDocumentOfVcxproj();
+
             projectSettingsPerConfig = vcCfgs.ToDictionary(
                 vcCfg => vcCfg.ConfigurationName, vcCfg => new Settings());
 
-            ExtractProjectSettings();
-            ExtractFileSettings();
+            ExtractProjectSettings(xml);
+            ExtractFileSettings(xml);
             if (WriteCMakeLists(cmakeSourceDir, cmProjects))
             {
                 logger.Info($"  {Project.Name} -> {System.IO.Path.Combine(cmakeListsDir, "CMakeLists.txt")}");
@@ -298,6 +307,42 @@ namespace VSslnToCMake
         private void OutputError(string message)
         {
             System.Console.WriteLine("Error: " + message);
+        }
+
+        // Create XmlDocument of the project file.
+        // The namespace is removed.
+        private System.Xml.XmlDocument CreateXmlDocumentOfVcxproj()
+        {
+            try
+            {
+                string text;
+                {
+                    var xmlOrg = new System.Xml.XmlDocument();
+                    xmlOrg.Load(project.FullName);
+
+                    var sw = new StringWriter();
+                    var tx = new System.Xml.XmlTextWriter(sw);
+                    xmlOrg.WriteTo(tx);
+                    text = sw.ToString();
+                }
+
+                // Remove namespace
+                var sr = new StringReader(text);
+                var xmlReader = new System.Xml.XmlTextReader(sr);
+                xmlReader.Namespaces = false;
+
+                var xml = new System.Xml.XmlDocument();
+                xml.Load(xmlReader);
+                xml.DocumentElement.RemoveAttribute("xmlns"); 
+
+                return xml;
+            }
+            catch (System.Xml.XmlException e)
+            {
+                OutputError($"Failed to load {project.FullName}");
+                OutputError(e.Message);
+            }
+            return null;
         }
 
         private void ExtractSourceFiles(Project vcprj)
@@ -343,7 +388,7 @@ namespace VSslnToCMake
             }
         }
 
-        private void ExtractProjectSettings()
+        private void ExtractProjectSettings(System.Xml.XmlDocument xml)
         {
             foreach (var vcCfg in vcCfgs)
             {
@@ -402,15 +447,25 @@ namespace VSslnToCMake
                 settings.linkLibs.Remove("");
                 TraceSettings("Link libraries", vcCfg,
                               settings.linkLibs);
+
+                // SDL check
+                var condition = $"'$(Configuration)|$(Platform)'=='{vcCfg.Name}'";
+                var nodes = xml.SelectNodes(
+                    $"//ItemDefinitionGroup[@Condition=\"{condition}\"]/ClCompile/SDLCheck");
+                if (nodes.Count == 1)
+                {
+                    settings.sdlCheck = nodes[0].InnerText == "true";
+                }
             }
         }
 
-        private void ExtractFileSettings()
+        private void ExtractFileSettings(System.Xml.XmlDocument xml)
         {
-            srcs.ForEach(x => ExtraceSourceFileSettings(x));
+            srcs.ForEach(x => ExtraceSourceFileSettings(x, xml));
         }
 
-        private void ExtraceSourceFileSettings(CMFile srcFile)
+        private void ExtraceSourceFileSettings(CMFile srcFile,
+                                               System.Xml.XmlDocument xml)
         {
             var fileCfgs = srcFile.vcFile.FileConfigurations as IVCCollection;
             foreach (string configName in BuildConfigurations)
@@ -438,6 +493,15 @@ namespace VSslnToCMake
                     pchFilePath = ctool.PrecompiledHeaderFile,
                     headerFilePath = ctool.PrecompiledHeaderThrough
                 };
+
+                // SDL Check
+                var condition = $"'$(Configuration)|$(Platform)'=='{vcCfg.Name}'";
+                var nodes = xml.SelectNodes(
+                    $"/Project/ItemGroup/ClCompile[@Include=\"{srcFile.vcFile.Name}\"]/SDLCheck[@Condition=\"{condition}\"]");
+                if (nodes.Count == 1)
+                {
+                    settings.sdlCheck = nodes[0].InnerText == "true";
+                }
             }
         }
 
@@ -550,6 +614,14 @@ namespace VSslnToCMake
             if (code != "")
             {
                 sb.AppendLine("# Preprocessor definitions");
+                sb.AppendLine(code);
+            }
+
+            // SDL check
+            code = BuildSDLCheckString();
+            if (code != "")
+            {
+                sb.AppendLine("# SDL check");
                 sb.AppendLine(code);
             }
 
@@ -711,9 +783,9 @@ namespace VSslnToCMake
 
                 var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
                                                       cmakeListsDir);
-                sb.AppendFormat($"set_source_files_properties({filePath}");
+                sb.AppendFormat($"set_property(SOURCE {filePath}");
                 sb.AppendLine();
-                sb.AppendLine("  PROPERTIES COMPILE_FLAGS");
+                sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
                 sb.AppendFormat(
                     "  \"{0}\")",
                     BuildConfigurationExpressions(
@@ -726,6 +798,114 @@ namespace VSslnToCMake
                 sb.AppendLine();
             }
 
+            return sb.ToString();
+        }
+
+        private string BuildSDLCheckString()
+        {
+            var sb = new StringBuilder();
+            
+            // Project settings
+            var cfgNames = projectSettingsPerConfig
+                           .Where(kv => kv.Value.sdlCheck != null)
+                           .Select(kv => kv.Key);
+            if (cfgNames.Count() > 0)
+            {
+                sb.AppendLine($"target_compile_options({targetName} PRIVATE");
+                sb.AppendFormat(
+                    "  \"{0}\"",
+                    cfgNames.ConfigExpressions(
+                        "\"" + System.Environment.NewLine + "  \"",
+                        cfgName => (cfgName),
+                        cfgName => {
+                            bool b = (bool)projectSettingsPerConfig[cfgName].sdlCheck;
+                            return b ? "/sdl" : "/sdl-";
+                        }));
+                sb.AppendLine();
+                sb.AppendLine(")");
+            }
+
+            // File settings
+            foreach (var src in srcs)
+            {
+                if (src.settingsPerConfig.Values.All(x => x.sdlCheck == null))
+                {
+                    continue;
+                }
+                var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
+                                                      cmakeListsDir);
+                sb.AppendLine($"set_property(SOURCE {filePath}");
+                sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
+                foreach (var kv in src.settingsPerConfig)
+                {
+                    if (kv.Value.sdlCheck != null)
+                    {
+                        sb.AppendFormat(
+                            "  \"$<$<CONFIG:{0}>:{1}>\"",
+                            kv.Key, (bool)kv.Value.sdlCheck ? "/sdl" : "/sdl-");
+                        sb.AppendLine();
+                    }
+                }
+                sb.AppendLine(")");
+            }
+
+            /*
+            var cfgNames = projectSettingsPerConfig.Select(kv => kv.Key);
+
+            // Project settings
+            sb.AppendLine($"target_compile_definitions({targetName} PRIVATE");
+            sb.AppendFormat("  {0}",
+                cfgNames.ConfigExpressions(
+                    Environment.NewLine + "  ", (cfgName) => cfgName, 
+                    (cfgName) => string.Join(";", projectSettingsPerConfig[cfgName].preprocessorDefs)));
+            sb.AppendLine();
+            sb.AppendLine(")");
+
+            // Keep project settings and sort them to compare ones of each file.
+            var orderedPpDefs = new Dictionary<string, List<string>>();
+            foreach (var cfgName in cfgNames)
+            {
+                var settings = projectSettingsPerConfig[cfgName];
+                var ppDefs = new List<string>(settings.preprocessorDefs);
+                ppDefs.Sort();
+                orderedPpDefs.Add(cfgName, ppDefs);
+            }
+
+            // File settings
+            foreach (var src in srcs)
+            {
+                if (src.settingsPerConfig.All(
+                        kv => kv.Value.preprocessorDefs.Count == 0))
+                {
+                    continue;
+                }
+                if (cfgNames.All(x => {
+                        var settings = src.settingsPerConfig[x];
+                        var ppDefs = new List<string>(settings.preprocessorDefs);
+                        ppDefs.Sort();
+                        return ppDefs.SequenceEqual(orderedPpDefs[x]);
+                    }))
+                {
+                    continue;
+                }
+
+                var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
+                                                      cmakeListsDir);
+                sb.AppendFormat($"set_property(SOURCE {filePath}");
+                sb.AppendLine();
+                sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
+                sb.AppendFormat(
+                    "  \"{0}\")",
+                    BuildConfigurationExpressions(
+                        src.settingsPerConfig
+                            .Where(kv => kv.Value.preprocessorDefs.Count() > 0)
+                            .Select(kv => (
+                                kv.Key,
+                                string.Join(
+                                    ";", kv.Value.preprocessorDefs.Select(pp => "-D" + pp))))));
+                sb.AppendLine();
+            }
+            */
             return sb.ToString();
         }
 
@@ -774,10 +954,10 @@ namespace VSslnToCMake
                         continue;
                     }
 
-                    sb.AppendFormat("set_source_files_properties({0}",
+                    sb.AppendFormat("set_property(SOURCE {0}",
                                     string.Join(" ", filePaths));
                     sb.AppendLine();
-                    sb.AppendLine("  PROPERTIES COMPILE_FLAGS");
+                    sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
                     sb.AppendFormat(
                         "  \"{0}\")",
                         cfgAndPchList.ConfigExpressions(
@@ -815,9 +995,9 @@ namespace VSslnToCMake
 
                     var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
                                                           cmakeListsDir);
-                    sb.AppendFormat($"set_source_files_properties({filePath}");
+                    sb.AppendFormat($"set_property(SOURCE {filePath}");
                     sb.AppendLine();
-                    sb.AppendLine("  PROPERTIES COMPILE_FLAGS");
+                    sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
                     sb.AppendFormat(
                         "  \"{0}\")",
                         BuildConfigurationExpressions(
