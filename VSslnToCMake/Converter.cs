@@ -112,7 +112,7 @@ namespace VSslnToCMake
             }
 
             // Verify that project configurations are same.
-            logger.Info("  Verifying that the configuratins of the solution and projects match.");
+            logger.Info("  Verifying that the configurations of the solution and projects match.");
             var projectNamesList = new List<List<string>>();
             var slnBuild = dte.Solution.SolutionBuild as SolutionBuild2;
             SolutionConfigurations slnCfgs = slnBuild.SolutionConfigurations;
