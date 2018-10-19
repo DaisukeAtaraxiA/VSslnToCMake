@@ -130,6 +130,11 @@ namespace VSslnToCMake
         /// SDL check
         /// </summary>
         public bool? sdlCheck;
+
+        /// <summary>
+        /// Multi-processor compilation
+        /// </summary>
+        public bool? mp;
     }
 
     class CMFile
@@ -456,6 +461,19 @@ namespace VSslnToCMake
                 {
                     settings.sdlCheck = nodes[0].InnerText == "true";
                 }
+
+                // MP
+                IVCCollection rules = vcCfg.Rules;
+                IVCRulePropertyStorage p = rules.Item("CL");
+                string mp = p.GetEvaluatedPropertyValue("MultiProcessorCompilation");
+                if (mp == "true")
+                {
+                    settings.mp = true;
+                }
+                else if (mp == "false")
+                {
+                    settings.mp = false;
+                }
             }
         }
 
@@ -501,6 +519,18 @@ namespace VSslnToCMake
                 if (nodes.Count == 1)
                 {
                     settings.sdlCheck = nodes[0].InnerText == "true";
+                }
+
+                // MP
+                var p = vcFileCfg.Tool as IVCRulePropertyStorage;
+                string mp = p.GetEvaluatedPropertyValue("MultiProcessorCompilation");
+                if (mp == "true")
+                {
+                    settings.mp = true;
+                }
+                else if (mp == "false")
+                {
+                    settings.mp = false;
                 }
             }
         }
@@ -630,6 +660,17 @@ namespace VSslnToCMake
             if (code != "")
             {
                 sb.AppendLine("# Precompiled header files");
+                sb.AppendLine(code);
+            }
+
+            // MP
+            // Note.
+            //   If the MP option is output before PCH setting,
+            //   PCH setting will be lost.
+            code = BuildMPString();
+            if (code != "")
+            {
+                sb.AppendLine("# Multi-processor compilation");
                 sb.AppendLine(code);
             }
 
@@ -907,6 +948,82 @@ namespace VSslnToCMake
             }
             */
             return sb.ToString();
+        }
+
+        private string BuildMPString()
+        {
+            var sb = new StringBuilder();
+
+            // Project settings
+
+            // Key: Configuration name, Value: MP
+            var projectsCfgAndMP = projectSettingsPerConfig
+                                   .ToDictionary(kv => kv.Key,
+                                                 kv => kv.Value.mp);
+            // Remove project's MP option if any file has false MP option.
+            var cfgNames = new List<string>(projectsCfgAndMP.Keys);
+            foreach (var cfgName in cfgNames)
+            {
+                if (srcs.Any(src => src.settingsPerConfig[cfgName].mp == false))
+                {
+                    projectsCfgAndMP[cfgName] = null;
+                }
+            }
+
+            if (projectsCfgAndMP.Any(kv => kv.Value == true))
+            {
+                sb.AppendLine($"target_compile_options({targetName} PRIVATE");
+                sb.AppendFormat(
+                    "  \"{0}\"",
+                    projectsCfgAndMP
+                        .Where(kv => kv.Value == true)
+                        .ConfigExpressions(
+                            "\"" + System.Environment.NewLine + "  \"",
+                            kv => kv.Key, kv => "/MP"));
+                sb.AppendLine();
+                sb.AppendLine(")");
+            }
+
+            // File settings
+            foreach (var src in srcs)
+            {
+                cfgNames = src.settingsPerConfig
+                           .Where(kv =>
+                           {
+                               var mp = kv.Value.mp;
+                               return mp == true &&
+                                      projectsCfgAndMP[kv.Key] != true;
+                           })
+                           .Select(kv => kv.Key)
+                           .ToList();
+
+                if (cfgNames.Count > 0)
+                {
+                    var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
+                                                          cmakeListsDir);
+                    sb.AppendLine($"set_property(SOURCE {filePath}");
+                    sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
+                    sb.AppendFormat(
+                        "  \"{0}\"",
+                        cfgNames.ConfigExpressions(
+                            "\"" + System.Environment.NewLine + "  \"",
+                            cfgName => cfgName, kv => "/MP"));
+                    sb.AppendLine();
+                    sb.AppendLine(")");
+                }
+            }
+
+            var text = sb.ToString();
+            if (text == "")
+            {
+                return "";
+            }
+
+            var sb2 = new StringBuilder();
+            sb2.AppendLine("if (MSVC)");
+            sb2.Append(IndentText(text));
+            sb2.AppendLine("endif ()");
+            return sb2.ToString();
         }
 
         private string BuildPrecompiledHeaderString()
