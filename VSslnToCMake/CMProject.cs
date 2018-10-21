@@ -890,63 +890,6 @@ namespace VSslnToCMake
                 sb.AppendLine(")");
             }
 
-            /*
-            var cfgNames = projectSettingsPerConfig.Select(kv => kv.Key);
-
-            // Project settings
-            sb.AppendLine($"target_compile_definitions({targetName} PRIVATE");
-            sb.AppendFormat("  {0}",
-                cfgNames.ConfigExpressions(
-                    Environment.NewLine + "  ", (cfgName) => cfgName, 
-                    (cfgName) => string.Join(";", projectSettingsPerConfig[cfgName].preprocessorDefs)));
-            sb.AppendLine();
-            sb.AppendLine(")");
-
-            // Keep project settings and sort them to compare ones of each file.
-            var orderedPpDefs = new Dictionary<string, List<string>>();
-            foreach (var cfgName in cfgNames)
-            {
-                var settings = projectSettingsPerConfig[cfgName];
-                var ppDefs = new List<string>(settings.preprocessorDefs);
-                ppDefs.Sort();
-                orderedPpDefs.Add(cfgName, ppDefs);
-            }
-
-            // File settings
-            foreach (var src in srcs)
-            {
-                if (src.settingsPerConfig.All(
-                        kv => kv.Value.preprocessorDefs.Count == 0))
-                {
-                    continue;
-                }
-                if (cfgNames.All(x => {
-                        var settings = src.settingsPerConfig[x];
-                        var ppDefs = new List<string>(settings.preprocessorDefs);
-                        ppDefs.Sort();
-                        return ppDefs.SequenceEqual(orderedPpDefs[x]);
-                    }))
-                {
-                    continue;
-                }
-
-                var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
-                                                      cmakeListsDir);
-                sb.AppendFormat($"set_property(SOURCE {filePath}");
-                sb.AppendLine();
-                sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
-                sb.AppendFormat(
-                    "  \"{0}\")",
-                    BuildConfigurationExpressions(
-                        src.settingsPerConfig
-                            .Where(kv => kv.Value.preprocessorDefs.Count() > 0)
-                            .Select(kv => (
-                                kv.Key,
-                                string.Join(
-                                    ";", kv.Value.preprocessorDefs.Select(pp => "-D" + pp))))));
-                sb.AppendLine();
-            }
-            */
             return sb.ToString();
         }
 
