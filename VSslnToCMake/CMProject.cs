@@ -132,6 +132,11 @@ namespace VSslnToCMake
         public bool? sdlCheck;
 
         /// <summary>
+        /// Minimal rebuild. /Gm
+        /// </summary>
+        public bool? minimalRebuild;
+
+        /// <summary>
         /// Multi-processor compilation
         /// </summary>
         public bool? mp;
@@ -461,6 +466,9 @@ namespace VSslnToCMake
                 {
                     settings.sdlCheck = nodes[0].InnerText == "true";
                 }
+                
+                // Minimal rebuild
+                settings.minimalRebuild = ctool.MinimalRebuild;
 
                 // MP
                 IVCCollection rules = vcCfg.Rules;
@@ -520,6 +528,9 @@ namespace VSslnToCMake
                 {
                     settings.sdlCheck = nodes[0].InnerText == "true";
                 }
+
+                // Minimal rebuild
+                settings.minimalRebuild = ctool.MinimalRebuild;
 
                 // MP
                 var p = vcFileCfg.Tool as IVCRulePropertyStorage;
@@ -655,11 +666,11 @@ namespace VSslnToCMake
                 sb.AppendLine(code);
             }
 
-            // Precompiled header
-            code = BuildPrecompiledHeaderString();
+            // Minimal rebuild
+            code = BuildMinimalRebuildString();
             if (code != "")
             {
-                sb.AppendLine("# Precompiled header files");
+                sb.AppendLine("# Minimal rebuild");
                 sb.AppendLine(code);
             }
 
@@ -671,6 +682,14 @@ namespace VSslnToCMake
             if (code != "")
             {
                 sb.AppendLine("# Multi-processor compilation");
+                sb.AppendLine(code);
+            }
+
+            // Precompiled header
+            code = BuildPrecompiledHeaderString();
+            if (code != "")
+            {
+                sb.AppendLine("# Precompiled header files");
                 sb.AppendLine(code);
             }
 
@@ -891,6 +910,72 @@ namespace VSslnToCMake
             }
 
             return sb.ToString();
+        }
+
+        private string BuildMinimalRebuildString()
+        {
+            var sb = new StringBuilder();
+            
+            // Project settings
+            var cfgNames = projectSettingsPerConfig
+                           .Where(kv => kv.Value.minimalRebuild != null)
+                           .Select(kv => kv.Key);
+            if (cfgNames.Count() > 0)
+            {
+                sb.AppendLine($"target_compile_options({targetName} PRIVATE");
+                sb.AppendFormat(
+                    "  \"{0}\"",
+                    cfgNames.ConfigExpressions(
+                        "\"" + System.Environment.NewLine + "  \"",
+                        cfgName => (cfgName),
+                        cfgName => {
+                            bool b = (bool)projectSettingsPerConfig[cfgName].minimalRebuild;
+                            return b ? "/Gm" : "/Gm-";
+                        }));
+                sb.AppendLine();
+                sb.AppendLine(")");
+            }
+
+            // File settings
+            foreach (var src in srcs)
+            {
+                if (src.settingsPerConfig.Values.All(x => x.minimalRebuild == null))
+                {
+                    continue;
+                }
+                if (src.settingsPerConfig.All(
+                        kv => kv.Value.minimalRebuild == projectSettingsPerConfig[kv.Key].minimalRebuild))
+                {
+                    continue;
+                }
+                var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
+                                                      cmakeListsDir);
+                sb.AppendLine($"set_property(SOURCE {filePath}");
+                sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
+                foreach (var kv in src.settingsPerConfig)
+                {
+                    if (kv.Value.minimalRebuild != null)
+                    {
+                        sb.AppendFormat(
+                            "  \"$<$<CONFIG:{0}>:{1}>\"",
+                            kv.Key, (bool)kv.Value.minimalRebuild ? "/Gm" : "/Gm-");
+                        sb.AppendLine();
+                    }
+                }
+                sb.AppendLine(")");
+            }
+
+            var text = sb.ToString();
+            if (text == "")
+            {
+                return "";
+            }
+
+            var sb2 = new StringBuilder();
+            sb2.AppendLine("if (MSVC)");
+            sb2.Append(IndentText(text));
+            sb2.AppendLine("endif ()");
+            return sb2.ToString();
         }
 
         private string BuildMPString()
