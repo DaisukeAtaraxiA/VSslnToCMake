@@ -6,7 +6,7 @@
 
 namespace VSslnToCMake
 {
-    abstract public class AbstractConverter
+    public abstract class AbstractConverter
     {
         /// <summary>
         /// Target platform
