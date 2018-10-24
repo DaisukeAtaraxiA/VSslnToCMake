@@ -22,11 +22,8 @@ namespace VSslnToCMake
             var slnBuild = dte.Solution.SolutionBuild as SolutionBuild2;
             foreach (SolutionConfiguration2 slnCfg in slnBuild.SolutionConfigurations)
             {
+                cfgNames.Add(slnCfg.Name);
                 platforms.Add(slnCfg.PlatformName);
-                foreach (SolutionContext context in slnCfg.SolutionContexts)
-                {
-                    cfgNames.Add(context.ConfigurationName);
-                }
             }
 
             targetPlatform = null;
