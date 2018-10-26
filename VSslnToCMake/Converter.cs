@@ -38,8 +38,8 @@ namespace VSslnToCMake
 
         public override bool Convert(EnvDTE.DTE dte)
         {
-            var targetProjects = new List<Project>();
-            if (!VerifySolution(dte, targetProjects))
+            var solutionInfoList = VerifySolution(dte);
+            if (solutionInfoList == null)
             {
                 return false;
             }
@@ -47,12 +47,18 @@ namespace VSslnToCMake
             logger.Info("Converting the projects");
 
             var cmProjects = new List<CMProject>();
-            foreach (var project in targetProjects)
+            foreach (var solutionInfo in solutionInfoList)
             {
-                var cmProject = new CMProject(project);
+                var cmProject = new CMProject(solutionInfo.project);
                 cmProject.setLogger(logger);
                 cmProject.Platform = Platform;
-                cmProject.BuildConfigurations = TargetConfigurations;
+                cmProject.BuildConfigurations =
+                    solutionInfo.cfgs.Select(x => x.prjCfgName).ToArray();
+                foreach (var cfg in solutionInfo.cfgs)
+                {
+                    cmProject.SetSolutionConfigurationName(cfg.prjCfgName,
+                                                         cfg.slnCfgName);
+                }
                 if (!cmProject.Prepare())
                 {
                     return false;
@@ -99,8 +105,13 @@ namespace VSslnToCMake
             return true;
         }
 
-        private bool VerifySolution(EnvDTE.DTE dte,
-                                    List<Project> targetProjects)
+        class SolutionInfo
+        {
+            public Project project;
+            public (string slnCfgName, string prjCfgName)[] cfgs;
+        }
+
+        private List<SolutionInfo> VerifySolution(EnvDTE.DTE dte)
         {
             logger.Info("Checking the solution file");
 
@@ -108,22 +119,35 @@ namespace VSslnToCMake
             if (Platform == "Any CPU")
             {
                 logger.Error("Platform 'Any CPU' is not supported.");
-                return false;
+                return null;
             }
 
             // Verify that project configurations are same.
             logger.Info("  Verifying that the configurations of the solution and projects match.");
-            var projectNamesList = new List<List<string>>();
             var slnBuild = dte.Solution.SolutionBuild as SolutionBuild2;
+
+            if (TargetConfigurations == null)
+            {
+                TargetConfigurations = slnBuild.SolutionConfigurations
+                                       .Cast<SolutionConfiguration2>()
+                                       .Where(x => x.PlatformName == Platform)
+                                       .Select(x => x.Name).ToArray();
+            }
+
+            var projectNamesList = new List<List<string>>();
+            var cfgNamesList = new List<List<(string slnCfgName, string prjCfgName)>>();
             SolutionConfigurations slnCfgs = slnBuild.SolutionConfigurations;
             foreach (SolutionConfiguration2 slnCfg in slnCfgs)
             {
-                if (slnCfg.PlatformName != Platform)
+                if (slnCfg.PlatformName != Platform ||
+                    !TargetConfigurations.Contains(slnCfg.Name))
                 {
                     continue;
                 }
 
                 var projectNames = new List<string>();
+                var cfgNames =
+                    new List<(string slnCfgName, string projectCfgName)>();
                 foreach (SolutionContext context in slnCfg.SolutionContexts)
                 {
                     if (!context.ShouldBuild)
@@ -133,30 +157,34 @@ namespace VSslnToCMake
                     if (context.PlatformName != Platform)
                     {
                         logger.Error($"The platform of {context.ProjectName} does not match {Platform}.");
-                        return false;
+                        return null;
                     }
                     if (context.ConfigurationName != slnCfg.Name)
                     {
-                        logger.Error($"Configuration of {context.ProjectName} does not match ones of the solution.");
-                        return false;
+                        logger.Info($"  Configuration of {context.ProjectName} does not match ones of the solution.");
+                        logger.Info($"    Solution: {slnCfg.Name}");
+                        logger.Info($"    Project: {context.ConfigurationName}");
+                        logger.Info($"  The configuration name '{context.ConfigurationName}' is replaced by '{slnCfg.Name}'.");
                     }
                     projectNames.Add(context.ProjectName);
+                    cfgNames.Add((slnCfg.Name, context.ConfigurationName));
                 }
 
                 if (projectNames.Count == 0)
                 {
                     logger.Error(
                         $"No project to build contains in configuration {slnCfg.Name}");
-                    return false;
+                    return null;
                 }
 
                 projectNamesList.Add(projectNames);
+                cfgNamesList.Add(cfgNames);
             }
             
             if (projectNamesList.Count == 0)
             {
                 logger.Error($"The solution file does not contain C/C++ projects on platform {Platform}.");
-                return false;
+                return null;
             }
 
             for (int i = 0; i < projectNamesList.Count; i++)
@@ -167,7 +195,7 @@ namespace VSslnToCMake
                     if (!projectNamesList[i].SequenceEqual(projectNamesList[0]))
                     {
                         logger.Error($"The project configurations are different.");
-                        return false;
+                        return null;
                     }
                 }
             }
@@ -181,7 +209,7 @@ namespace VSslnToCMake
             Projects projects = dte.Solution.Projects;
 
             // Verifying existance of VC++ project, and platform.
-            targetProjects.Clear();
+            var solutionInfoList = new List<SolutionInfo>();
             foreach (Project project in projects)
             {
                 System.Console.WriteLine(project.Name);
@@ -194,20 +222,29 @@ namespace VSslnToCMake
                         $"Project '{project.Name}' is not a Visual C++ project.");
                     continue;
                 }
-                if (!projectsFullPath.Contains(project.FullName.ToLower()))
+
+                var index = projectsFullPath.FindIndex(
+                    x => x == project.FullName.ToLower());
+                if (index < 0)
                 {
                     continue;
                 }
-                targetProjects.Add(project);
+
+                var solutionInfo = new SolutionInfo();
+                solutionInfo.project = project;
+                solutionInfo.cfgs = cfgNamesList.Select(
+                    x => (x[index].slnCfgName, x[index].prjCfgName)).ToArray();
+
+                solutionInfoList.Add(solutionInfo);
             }
-            if (targetProjects.Count() == 0)
+            if (solutionInfoList.Count() == 0)
             {
                 logger.Error("No Visual C++ projects to build.");
-                return false;
+                return null;
             }
 
             logger.Info("Checking the solution file - done");
-            return true;
+            return solutionInfoList;
         }
     }
 }

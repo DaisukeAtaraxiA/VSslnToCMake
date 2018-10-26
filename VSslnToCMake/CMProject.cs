@@ -179,6 +179,9 @@ namespace VSslnToCMake
         public Project Project { get { return project; } }
 
         private Logger logger = new NullLogger();
+        // Key: Configuration name to be convert
+        // Value: Output configuration name
+        private Dictionary<string, string> solutionConfigurationNames;
         private Project project;
         private VCProject vcProject;
         private List<VCConfiguration> vcCfgs;
@@ -201,16 +204,36 @@ namespace VSslnToCMake
             this.logger = logger;
         }
 
+        public void SetSolutionConfigurationName(
+            string projectConfigurationName, string solutionConfigurationName)
+        {
+            if (BuildConfigurations == null)
+            {
+                return;
+            }
+            if (BuildConfigurations.Contains(projectConfigurationName))
+            {
+                if (solutionConfigurationNames == null)
+                {
+                    solutionConfigurationNames = new Dictionary<string, string>();
+                }
+                solutionConfigurationNames[projectConfigurationName] =
+                    solutionConfigurationName;
+            }
+        }
+
         public Dictionary<string, string> getOutputPaths()
         {
-            return vcCfgs.ToDictionary(x => x.ConfigurationName,
-                                       x => x.Evaluate(x.PrimaryOutput));
+            return vcCfgs.ToDictionary(
+                x => solutionConfigurationNames[x.ConfigurationName],
+                x => x.Evaluate(x.PrimaryOutput));
         }
 
         public Dictionary<string, string> getImportLibraries()
         {
-            return vcCfgs.ToDictionary(x => x.ConfigurationName,
-                                       x => x.Evaluate(x.ImportLibrary));
+            return vcCfgs.ToDictionary(
+                x => solutionConfigurationNames[x.ConfigurationName],
+                x => x.Evaluate(x.ImportLibrary));
         }
 
         public bool Prepare()
@@ -243,6 +266,25 @@ namespace VSslnToCMake
                         return false;
                     }
                     vcCfgs.Add(cfg as VCConfiguration);
+                }
+            }
+
+            // Output configuration names
+            // If the output configuration names are not set,
+            // they are the same as the build configuration names.
+            if (solutionConfigurationNames == null)
+            {
+                solutionConfigurationNames =
+                    BuildConfigurations.ToDictionary(x => x, x => x);
+            }
+            else
+            {
+                foreach (var cfgName in BuildConfigurations)
+                {
+                    if (!solutionConfigurationNames.ContainsKey(cfgName))
+                    {
+                        solutionConfigurationNames.Add(cfgName, cfgName);
+                    }
                 }
             }
 #if DEBUG
@@ -592,8 +634,9 @@ namespace VSslnToCMake
             sbh.AppendLine();
 
             // Configuration types
-            sb.AppendFormat("set(CMAKE_CONFIGURATION_TYPES \"{0}\"",
-                            string.Join(";", BuildConfigurations));
+            sb.AppendFormat(
+                "set(CMAKE_CONFIGURATION_TYPES \"{0}\"",
+                string.Join(";", solutionConfigurationNames.Values));
             sb.AppendLine();
             sb.AppendLine("    CACHE STRING \"Configuration types\" FORCE)");
             sb.AppendLine();
@@ -756,7 +799,7 @@ namespace VSslnToCMake
             sb.AppendLine();
             foreach (var vcCfg in vcCfgs)
             {
-                var configUpper = vcCfg.ConfigurationName.ToUpper();
+                var configUpper = solutionConfigurationNames[vcCfg.ConfigurationName].ToUpper();
                 var fileName = System.IO.Path.GetFileNameWithoutExtension(vcCfg.PrimaryOutput);
                 sb.AppendFormat($"  OUTPUT_NAME_{configUpper} {fileName}");
                 sb.AppendLine();
@@ -765,6 +808,15 @@ namespace VSslnToCMake
 
             return sb.ToString();
         }
+
+        private string GetSolutionConfigurationName<Value>(KeyValuePair<string, Value> kv)
+        {
+            return solutionConfigurationNames[kv.Key];
+        }
+
+        private string GetSolutionConfigurationName<Value>((string, Value) kv) => solutionConfigurationNames[kv.Item1];
+
+        private string GetSolutionConfigurationName(string name) => solutionConfigurationNames[name];
 
         private string BuildAdditionalIncludeDirectoriesString(
             string solutionDir)
@@ -795,7 +847,7 @@ namespace VSslnToCMake
             sb.AppendFormat("  {0}",
                 dirsPerCfg.ConfigExpressions(
                     Environment.NewLine + "  ",
-                    kv => kv.cfgName,
+                    GetSolutionConfigurationName,
                     kv => Environment.NewLine + "    " + 
                           string.Join(";" + Environment.NewLine + "    ",
                                       kv.paths)));
@@ -814,7 +866,7 @@ namespace VSslnToCMake
             sb.AppendLine($"target_compile_definitions({targetName} PRIVATE");
             sb.AppendFormat("  {0}",
                 cfgNames.ConfigExpressions(
-                    Environment.NewLine + "  ", (cfgName) => cfgName, 
+                    Environment.NewLine + "  ", GetSolutionConfigurationName,
                     (cfgName) => string.Join(";", projectSettingsPerConfig[cfgName].preprocessorDefs)));
             sb.AppendLine();
             sb.AppendLine(")");
@@ -858,7 +910,7 @@ namespace VSslnToCMake
                         src.settingsPerConfig
                             .Where(kv => kv.Value.preprocessorDefs.Count() > 0)
                             .Select(kv => (
-                                kv.Key,
+                                solutionConfigurationNames[kv.Key],
                                 string.Join(
                                     ";", kv.Value.preprocessorDefs.Select(pp => "-D" + pp))))));
                 sb.AppendLine();
@@ -882,7 +934,7 @@ namespace VSslnToCMake
                     "  \"{0}\"",
                     cfgNames.ConfigExpressions(
                         "\"" + System.Environment.NewLine + "  \"",
-                        cfgName => (cfgName),
+                        GetSolutionConfigurationName,
                         cfgName => {
                             bool b = (bool)projectSettingsPerConfig[cfgName].sdlCheck;
                             return b ? "/sdl" : "/sdl-";
@@ -908,7 +960,8 @@ namespace VSslnToCMake
                     {
                         sb.AppendFormat(
                             "  \"$<$<CONFIG:{0}>:{1}>\"",
-                            kv.Key, (bool)kv.Value.sdlCheck ? "/sdl" : "/sdl-");
+                            solutionConfigurationNames[kv.Key],
+                            (bool)kv.Value.sdlCheck ? "/sdl" : "/sdl-");
                         sb.AppendLine();
                     }
                 }
@@ -933,7 +986,7 @@ namespace VSslnToCMake
                     "  \"{0}\"",
                     cfgNames.ConfigExpressions(
                         "\"" + System.Environment.NewLine + "  \"",
-                        cfgName => (cfgName),
+                        GetSolutionConfigurationName,
                         cfgName => {
                             bool b = (bool)projectSettingsPerConfig[cfgName].minimalRebuild;
                             return b ? "/Gm" : "/Gm-";
@@ -964,7 +1017,8 @@ namespace VSslnToCMake
                     {
                         sb.AppendFormat(
                             "  \"$<$<CONFIG:{0}>:{1}>\"",
-                            kv.Key, (bool)kv.Value.minimalRebuild ? "/Gm" : "/Gm-");
+                            solutionConfigurationNames[kv.Key],
+                            (bool)kv.Value.minimalRebuild ? "/Gm" : "/Gm-");
                         sb.AppendLine();
                     }
                 }
@@ -1013,7 +1067,7 @@ namespace VSslnToCMake
                         .Where(kv => kv.Value == true)
                         .ConfigExpressions(
                             "\"" + System.Environment.NewLine + "  \"",
-                            kv => kv.Key, kv => "/MP"));
+                            GetSolutionConfigurationName, kv => "/MP"));
                 sb.AppendLine();
                 sb.AppendLine(")");
             }
@@ -1041,7 +1095,7 @@ namespace VSslnToCMake
                         "  \"{0}\"",
                         cfgNames.ConfigExpressions(
                             "\"" + System.Environment.NewLine + "  \"",
-                            cfgName => cfgName, kv => "/MP"));
+                            GetSolutionConfigurationName, kv => "/MP"));
                     sb.AppendLine();
                     sb.AppendLine(")");
                 }
@@ -1113,7 +1167,8 @@ namespace VSslnToCMake
                         "  \"{0}\")",
                         cfgAndPchList.ConfigExpressions(
                             "\\" + Environment.NewLine + "   ",
-                            kv => kv.Item1, kv => kv.Item2));
+                            kv => solutionConfigurationNames[kv.Item1],
+                            kv => kv.Item2));
                     sb.AppendLine();
                 }
 
@@ -1128,7 +1183,7 @@ namespace VSslnToCMake
                 sb.AppendFormat("  \"{0}\"",
                     projectSettingsPerConfig.ConfigExpressions(
                         "\"" + Environment.NewLine + "  \"",
-                        kv => kv.Key,
+                        GetSolutionConfigurationName,
                         kv => kv.Value.pch.BuildPchOptionString()));
                 sb.AppendLine();
                 sb.AppendLine(")");
@@ -1153,7 +1208,7 @@ namespace VSslnToCMake
                         "  \"{0}\")",
                         BuildConfigurationExpressions(
                             src.settingsPerConfig.Select(
-                                kv => (kv.Key, 
+                                kv => (solutionConfigurationNames[kv.Key],
                                        kv.Value.pch.BuildPchOptionString()))));
                     sb.AppendLine();
                 }
@@ -1234,7 +1289,7 @@ namespace VSslnToCMake
                 {
                     continue;
                 }
-                sb.AppendLine($"  $<$<CONFIG:{cfgName}>:");
+                sb.AppendLine($"  $<$<CONFIG:{solutionConfigurationNames[cfgName]}>:");
                 foreach (var path in paths)
                 {
                     sb.Append($"    {option}{path}");
@@ -1384,7 +1439,8 @@ namespace VSslnToCMake
                 }
 
                 sb.AppendFormat("  \"$<$<CONFIG:{0}>:{1}>\"",
-                                cfgName, string.Join(";", linkOptions));
+                                solutionConfigurationNames[cfgName],
+                                string.Join(";", linkOptions));
                 sb.AppendLine();
             }
             sb.AppendLine(")");
