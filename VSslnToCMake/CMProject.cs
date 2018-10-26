@@ -38,9 +38,15 @@ namespace VSslnToCMake
             this IEnumerable<T> source, string separator,
             Func<T, string> predCfg, Func<T, string> predValue)
         {
-            return source.Where(x => predValue(x) != "")
-                         .Select(x => ConfigExpression(x, predCfg, predValue))
-                         .Aggregate((a, b) => a + separator + b);
+            var cfgs = source
+                       .Where(x => predValue(x) != "")
+                       .Select(x => ConfigExpression(x, predCfg, predValue))
+                       .ToArray();
+            if (cfgs.Count() == 0)
+            {
+                return "";
+            }
+            return cfgs.Aggregate((a, b) => a + separator + b);
         }
     }
 
