@@ -1179,14 +1179,16 @@ namespace VSslnToCMake
                 var sb = new StringBuilder();
 
                 // Project settings
-                sb.AppendLine($"target_compile_options({targetName} PRIVATE");
-                sb.AppendFormat("  \"{0}\"",
-                    projectSettingsPerConfig.ConfigExpressions(
-                        "\"" + Environment.NewLine + "  \"",
-                        GetSolutionConfigurationName,
-                        kv => kv.Value.pch.BuildPchOptionString()));
-                sb.AppendLine();
-                sb.AppendLine(")");
+                var opt = projectSettingsPerConfig.ConfigExpressions(
+                    "\"" + Environment.NewLine + "  \"",
+                    GetSolutionConfigurationName,
+                    kv => kv.Value.pch.BuildPchOptionString());
+                if (opt != "")
+                {
+                    sb.AppendLine($"target_compile_options({targetName} PRIVATE");
+                    sb.AppendLine($"  \"{opt}\"");
+                    sb.AppendLine(")");
+                }
 
                 // File settings
                 foreach (var src in srcs)
@@ -1199,18 +1201,19 @@ namespace VSslnToCMake
                         continue;
                     }
 
-                    var filePath = Utility.ToRelativePath(src.vcFile.FullPath,
-                                                          cmakeListsDir);
-                    sb.AppendFormat($"set_property(SOURCE {filePath}");
-                    sb.AppendLine();
-                    sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
-                    sb.AppendFormat(
-                        "  \"{0}\")",
-                        BuildConfigurationExpressions(
-                            src.settingsPerConfig.Select(
-                                kv => (solutionConfigurationNames[kv.Key],
-                                       kv.Value.pch.BuildPchOptionString()))));
-                    sb.AppendLine();
+                    opt = BuildConfigurationExpressions(
+                        src.settingsPerConfig.Select(
+                            kv => (solutionConfigurationNames[kv.Key],
+                                   kv.Value.pch.BuildPchOptionString())));
+                    if (opt != "")
+                    {
+                        var filePath = Utility.ToRelativePath(
+                            src.vcFile.FullPath, cmakeListsDir);
+                        sb.AppendFormat($"set_property(SOURCE {filePath}");
+                        sb.AppendLine();
+                        sb.AppendLine("  APPEND_STRING PROPERTY COMPILE_FLAGS");
+                        sb.AppendLine($"  \"{opt}\")");
+                    }
                 }
 
                 text = sb.ToString();
