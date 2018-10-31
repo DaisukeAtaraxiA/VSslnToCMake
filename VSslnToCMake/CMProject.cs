@@ -1574,7 +1574,7 @@ namespace VSslnToCMake
                 {
                     string val = vcCfg.Evaluate(vsMacroNames[index]);
                     text = text.Substring(0, begin) + val + text.Substring(end + 1);
-                    startIndex = begin + val.Length + 1;
+                    startIndex = begin + val.Length;
                 }
                 else 
                 {
